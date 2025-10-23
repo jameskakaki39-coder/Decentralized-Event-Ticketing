@@ -10,6 +10,9 @@
 (define-constant ERR_PRICE_CEILING (err u108))
 (define-constant ERR_SAME_OWNER (err u109))
 (define-constant ERR_NOT_OWNER (err u110))
+(define-constant ERR_ALREADY_REFUNDED (err u111))
+(define-constant ERR_EVENT_STILL_ACTIVE (err u112))
+(define-constant ERR_NO_REFUND_AVAILABLE (err u113))
 
 (define-data-var next-event-id uint u0)
 (define-data-var next-ticket-id uint u0)
@@ -56,6 +59,11 @@
 (define-map user-last-purchase
   { user: principal }
   { block-height: uint }
+)
+
+(define-map refund-claims
+  { ticket-id: uint }
+  { refunded: bool, refund-block: uint }
 )
 
 (define-public (create-event 
@@ -274,6 +282,47 @@
             true
           )
         )
+      )
+    false
+  )
+)
+
+(define-public (claim-refund (ticket-id uint))
+  (let
+    (
+      (ticket (unwrap! (map-get? tickets { ticket-id: ticket-id }) ERR_INVALID_TICKET))
+      (event (unwrap! (map-get? events { event-id: (get event-id ticket) }) ERR_INVALID_EVENT))
+      (refund-status (map-get? refund-claims { ticket-id: ticket-id }))
+    )
+    (asserts! (is-eq tx-sender (get owner ticket)) ERR_NOT_OWNER)
+    (asserts! (is-eq (get status event) u0) ERR_EVENT_STILL_ACTIVE)
+    (asserts! (is-none refund-status) ERR_ALREADY_REFUNDED)
+    
+    (try! (as-contract (stx-transfer? (get purchase-price ticket) tx-sender (get owner ticket))))
+    
+    (map-set refund-claims
+      { ticket-id: ticket-id }
+      { refunded: true, refund-block: stacks-block-height }
+    )
+    
+    (ok true)
+  )
+)
+
+(define-read-only (get-refund-status (ticket-id uint))
+  (map-get? refund-claims { ticket-id: ticket-id })
+)
+
+(define-read-only (is-refund-available (ticket-id uint))
+  (match (map-get? tickets { ticket-id: ticket-id })
+    ticket
+      (match (map-get? events { event-id: (get event-id ticket) })
+        event
+          (and
+            (is-eq (get status event) u0)
+            (is-none (map-get? refund-claims { ticket-id: ticket-id }))
+          )
+        false
       )
     false
   )
